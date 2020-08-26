@@ -10,8 +10,12 @@ import android.provider.MediaStore;
 import android.content.ContentUris;
 import android.os.Environment;
 import android.content.ContentResolver;
+
+import androidx.annotation.Nullable;
+
 import com.RNFetchBlob.RNFetchBlobUtils;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.FileOutputStream;
 
@@ -41,15 +45,15 @@ public class PathResolver {
                     final String id = DocumentsContract.getDocumentId(uri);
                     //Starting with Android O, this "id" is not necessarily a long (row number),
                     //but might also be a "raw:/some/file/path" URL
-                    if (id != null && id.startsWith("raw:/")) {
-                        Uri rawuri = Uri.parse(id);
-                        String path = rawuri.getPath();
-                        return path;
+                    if (id != null) {
+                        if (id.startsWith("raw:/")) {
+                            Uri rawUri = Uri.parse(id);
+                            return rawUri.getPath();
+                        }
+                        final Uri contentUri = ContentUris.withAppendedId(
+                                Uri.parse("content://downloads/public_downloads"), Long.parseLong(id));
+                        return getDataColumn(context, contentUri, null, null);
                     }
-                    final Uri contentUri = ContentUris.withAppendedId(
-                            Uri.parse("content://downloads/public_downloads"), Long.valueOf(id));
-
-                    return getDataColumn(context, contentUri, null, null);
                 }
                 catch (Exception ex) {
                     //something went wrong, but android should still be able to handle the original uri by returning null here (see readFile(...))
@@ -85,30 +89,16 @@ public class PathResolver {
                 if (isGooglePhotosUri(uri))
                     return uri.getLastPathSegment();
 
-                return getDataColumn(context, uri, null, null);
+                String result = getDataColumn(context, uri, null, null);
+                if (result != null) {
+                    return result;
+                } else {
+                    return getPathByDownloadingFromUri(context, uri);
+                }
             }
             // Other Providers
             else{
-                try {
-                    InputStream attachment = context.getContentResolver().openInputStream(uri);
-                    if (attachment != null) {
-                        String filename = getContentName(context.getContentResolver(), uri);
-                        if (filename != null) {
-                            File file = new File(context.getCacheDir(), filename);
-                            FileOutputStream tmp = new FileOutputStream(file);
-                            byte[] buffer = new byte[1024];
-                            while (attachment.read(buffer) > 0) {
-                                tmp.write(buffer);
-                            }
-                            tmp.close();
-                            attachment.close();
-                            return file.getAbsolutePath();
-                        }
-                    }
-                } catch (Exception e) {
-                    RNFetchBlobUtils.emitWarningEvent(e.toString());
-                    return null;
-                }
+                return getPathByDownloadingFromUri(context, uri);
             }
         }
         // MediaStore (and general)
@@ -128,14 +118,17 @@ public class PathResolver {
         return null;
     }
 
+    @Nullable
     private static String getContentName(ContentResolver resolver, Uri uri) {
         Cursor cursor = resolver.query(uri, null, null, null, null);
-        cursor.moveToFirst();
-        int nameIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
-        if (nameIndex >= 0) {
-            String name = cursor.getString(nameIndex);
-            cursor.close();
-            return name;
+        if (cursor != null) {
+            cursor.moveToFirst();
+            int nameIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
+            if (nameIndex >= 0) {
+                String name = cursor.getString(nameIndex);
+                cursor.close();
+                return name;
+            }
         }
         return null;
     }
@@ -179,6 +172,52 @@ public class PathResolver {
         return result;
     }
 
+    @Nullable
+    private static String getPathByDownloadingFromUri(Context context, Uri uri) {
+        InputStream attachment = null;
+        try {
+            attachment = context.getContentResolver().openInputStream(uri);
+            if (attachment != null) {
+                String fileName = getContentName(context.getContentResolver(), uri);
+                if (fileName != null) {
+                    File file = new File(context.getCacheDir(), fileName);
+                    FileOutputStream tmp = new FileOutputStream(file);
+                    try {
+                        byte[] buffer =new byte[1024];
+                        while (attachment.read(buffer) > 0) {
+                            tmp.write(buffer);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        RNFetchBlobUtils.emitWarningEvent(e.toString());
+                    } finally {
+                        try {
+                            tmp.close();
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                            RNFetchBlobUtils.emitWarningEvent(e.toString());
+                        }
+                    }
+                    attachment.close();
+                    return file.getAbsolutePath();
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            RNFetchBlobUtils.emitWarningEvent(e.toString());
+            return null;
+        } finally {
+            if (attachment != null) {
+                try {
+                    attachment.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    RNFetchBlobUtils.emitWarningEvent(e.toString());
+                }
+            }
+        }
+        return null;
+    }
 
     /**
      * @param uri The Uri to check.
