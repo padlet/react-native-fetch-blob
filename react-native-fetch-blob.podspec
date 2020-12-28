@@ -12,5 +12,6 @@ Pod::Spec.new do |s|
   s.author       = 'Joltup'
   s.source_files = 'ios/**/*.{h,m}'
   s.platform     = :ios, "8.0"
-  s.dependency 'React/Core'
+
+  s.dependency 'React'
 end
